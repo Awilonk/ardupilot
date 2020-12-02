@@ -3,6 +3,7 @@
 //
 
 #include "Copter.h"
+#include "Plane.h"
 
 #if PRECISION_LANDING == ENABLED
 
