@@ -246,6 +246,8 @@ private:
     AP_Camera camera{MASK_LOG_CAMERA, current_loc};
 #endif
 
+    AC_PrecLand precland;
+
 #if OPTFLOW == ENABLED
     // Optical flow sensor
     OpticalFlow optflow;
