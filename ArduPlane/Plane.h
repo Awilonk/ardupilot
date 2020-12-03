@@ -76,6 +76,7 @@
 #include <AP_OSD/AP_OSD.h>
 
 #include <AP_Rally/AP_Rally.h>
+#include <AC_PrecLand/AC_PrecLand.h>
 
 #include <AP_OpticalFlow/AP_OpticalFlow.h>     // Optical Flow library
 #include <AP_Parachute/AP_Parachute.h>
@@ -455,7 +456,7 @@ private:
         
         // proportion to next waypoint
         float wp_proportion;
-        
+
         // last time is_flying() returned true in milliseconds
         uint32_t last_flying_ms;
 
