@@ -994,6 +994,10 @@ private:
     void setup_turn_angle(void);
     bool reached_loiter_target(void);
 
+    // precision_landing.cpp
+    void init_precland();
+    void update_precland();
+
     // radio.cpp
     void set_control_channels(void) override;
     void init_rc_in();
