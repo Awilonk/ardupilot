@@ -37,9 +37,7 @@ void Plane::read_rangefinder(void)
 // return true if rangefinder_alt can be used
 bool Plane::rangefinder_alt_ok(void)
 {
-//    return rangefinder.status_orient(ROTATION_PITCH_270) == RangeFinder::RangeFinder_Good;
-    return (rangefinder_state.enabled && rangefinder_state.alt_healthy);
-
+    return rangefinder.status_orient(ROTATION_PITCH_270) == RangeFinder::Status::Good;
 }
 
 /*
