@@ -3,6 +3,7 @@
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
 
 #include "Semaphores.h"
+#include "Scheduler.h"
 
 extern const AP_HAL::HAL& hal;
 
@@ -10,12 +11,6 @@ using namespace HALSITL;
 
 // construct a semaphore
 Semaphore::Semaphore()
-{
-    pthread_mutex_init(&_lock, nullptr);
-}
-
-// construct a recursive semaphore (allows a thread to take it more than once)
-Semaphore_Recursive::Semaphore_Recursive()
 {
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -29,21 +24,38 @@ bool Semaphore::give()
     if (pthread_mutex_unlock(&_lock) != 0) {
         AP_HAL::panic("Bad semaphore usage");
     }
+    owner = (pthread_t)-1;
     return true;
+}
+
+void Semaphore::check_owner()
+{
+    // should probably make sure we're holding the semaphore here....
+    if (owner != pthread_self()) {
+        AP_HAL::panic("Wrong owner");
+    }
 }
 
 bool Semaphore::take(uint32_t timeout_ms)
 {
     if (timeout_ms == HAL_SEMAPHORE_BLOCK_FOREVER) {
-        return pthread_mutex_lock(&_lock) == 0;
+        if (pthread_mutex_lock(&_lock) == 0) {
+            owner = pthread_self();
+            return true;
+        }
+        return false;
     }
     if (take_nonblocking()) {
+        owner = pthread_self();
         return true;
     }
     uint64_t start = AP_HAL::micros64();
     do {
+        Scheduler::from(hal.scheduler)->set_in_semaphore_take_wait(true);
         hal.scheduler->delay_microseconds(200);
+        Scheduler::from(hal.scheduler)->set_in_semaphore_take_wait(false);
         if (take_nonblocking()) {
+            owner = pthread_self();
             return true;
         }
     } while ((AP_HAL::micros64() - start) < timeout_ms * 1000);

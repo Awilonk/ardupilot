@@ -23,6 +23,8 @@
 #include "AP_AHRS.h"
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_GPS/AP_GPS.h>
+#include <AP_Baro/AP_Baro.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -67,23 +69,21 @@ AP_AHRS_DCM::update(bool skip_ins_update)
 {
     // support locked access functions to AHRS data
     WITH_SEMAPHORE(_rsem);
-    
-    float delta_t;
 
     if (_last_startup_ms == 0) {
         _last_startup_ms = AP_HAL::millis();
         load_watchdog_home();
     }
 
+    AP_InertialSensor &_ins = AP::ins();
+
     if (!skip_ins_update) {
         // tell the IMU to grab some data
-        AP::ins().update();
+        _ins.update();
     }
 
-    const AP_InertialSensor &_ins = AP::ins();
-
     // ask the IMU how much time this sensor reading represents
-    delta_t = _ins.get_delta_time();
+    const float delta_t = _ins.get_delta_time();
 
     // if the update call took more than 0.2 seconds then discard it,
     // otherwise we may move too far. This happens when arming motors
@@ -148,7 +148,7 @@ AP_AHRS_DCM::matrix_update(float _G_Dt)
     Vector3f delta_angle;
     const AP_InertialSensor &_ins = AP::ins();
     for (uint8_t i=0; i<_ins.get_gyro_count(); i++) {
-        if (_ins.get_gyro_health(i) && healthy_count < 2) {
+        if (_ins.use_gyro(i) && healthy_count < 2) {
             Vector3f dangle;
             if (_ins.get_delta_angle(i, dangle)) {
                 healthy_count++;
@@ -456,7 +456,7 @@ bool AP_AHRS_DCM::use_compass(void)
     // degrees and the estimated wind speed is less than 80% of the
     // ground speed, then switch to GPS navigation. This will help
     // prevent flyaways with very bad compass offsets
-    const int32_t error = abs(wrap_180_cd(yaw_sensor - AP::gps().ground_course_cd()));
+    const int32_t error = labs(wrap_180_cd(yaw_sensor - AP::gps().ground_course_cd()));
     if (error > 4500 && _wind.length() < AP::gps().ground_speed()*0.8f) {
         if (AP_HAL::millis() - _last_consistent_heading > 2000) {
             // start using the GPS for heading if the compass has been
@@ -468,6 +468,13 @@ bool AP_AHRS_DCM::use_compass(void)
     }
 
     // use the compass
+    return true;
+}
+
+// return the quaternion defining the rotation from NED to XYZ (body) axes
+bool AP_AHRS_DCM::get_quaternion(Quaternion &quat) const
+{
+    quat.from_rotation_matrix(_dcm_matrix);
     return true;
 }
 
@@ -636,8 +643,9 @@ AP_AHRS_DCM::drift_correction(float deltat)
     const AP_InertialSensor &_ins = AP::ins();
 
     // rotate accelerometer values into the earth frame
+    uint8_t healthy_count = 0;
     for (uint8_t i=0; i<_ins.get_accel_count(); i++) {
-        if (_ins.get_accel_health(i)) {
+        if (_ins.use_accel(i) && healthy_count < 2) {
             /*
               by using get_delta_velocity() instead of get_accel() the
               accel value is sampled over the right time delta for
@@ -651,6 +659,7 @@ AP_AHRS_DCM::drift_correction(float deltat)
                 // integrate the accel vector in the earth frame between GPS readings
                 _ra_sum[i] += _accel_ef[i] * deltat;
             }
+            healthy_count++;
         }
     }
 
@@ -1035,40 +1044,38 @@ bool AP_AHRS_DCM::get_position(struct Location &loc) const
 }
 
 // return an airspeed estimate if available
-bool AP_AHRS_DCM::airspeed_estimate(float *airspeed_ret) const
+bool AP_AHRS_DCM::airspeed_estimate(float &airspeed_ret) const
 {
-    bool ret = false;
-    if (airspeed_sensor_enabled()) {
-        *airspeed_ret = _airspeed->get_airspeed();
-        return true;
-    }
+    return airspeed_estimate(_airspeed?_airspeed->get_primary():0, airspeed_ret);
+}
 
-    if (!_flags.wind_estimation) {
+// return an airspeed estimate from a specific airspeed sensor instance if available
+bool AP_AHRS_DCM::airspeed_estimate(uint8_t airspeed_index, float &airspeed_ret) const
+{
+    if (airspeed_sensor_enabled(airspeed_index)) {
+        airspeed_ret = _airspeed->get_airspeed(airspeed_index);
+    } else if (_flags.wind_estimation && have_gps()) {
+        // estimate it via GPS speed and wind
+        airspeed_ret = _last_airspeed;
+    } else {
+        // give the last estimate, but return false. This is used by
+        // dead-reckoning code
+        airspeed_ret = _last_airspeed;
         return false;
     }
 
-    // estimate it via GPS speed and wind
-    if (have_gps()) {
-        *airspeed_ret = _last_airspeed;
-        ret = true;
-    }
-
-    if (ret && _wind_max > 0 && AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D) {
+    if (_wind_max > 0 && AP::gps().status() >= AP_GPS::GPS_OK_FIX_2D) {
         // constrain the airspeed by the ground speed
         // and AHRS_WIND_MAX
         const float gnd_speed = AP::gps().ground_speed();
-        float true_airspeed = *airspeed_ret * get_EAS2TAS();
+        float true_airspeed = airspeed_ret * get_EAS2TAS();
         true_airspeed = constrain_float(true_airspeed,
                                         gnd_speed - _wind_max,
                                         gnd_speed + _wind_max);
-        *airspeed_ret = true_airspeed / get_EAS2TAS();
+        airspeed_ret = true_airspeed / get_EAS2TAS();
     }
-    if (!ret) {
-        // give the last estimate, but return false. This is used by
-        // dead-reckoning code
-        *airspeed_ret = _last_airspeed;
-    }
-    return ret;
+
+    return true;
 }
 
 bool AP_AHRS_DCM::set_home(const Location &loc)
@@ -1133,3 +1140,12 @@ bool AP_AHRS_DCM::get_velocity_NED(Vector3f &vec) const
     return true;
 }
 
+// returns false if we fail arming checks, in which case the buffer will be populated with a failure message
+bool AP_AHRS_DCM::pre_arm_check(char *failure_msg, uint8_t failure_msg_len) const
+{
+    if (!healthy()) {
+        hal.util->snprintf(failure_msg, failure_msg_len, "Not healthy");
+        return false;
+    }
+    return true;
+}

@@ -29,6 +29,9 @@ public:
     // override with a custom destructor if need be
     virtual ~AP_WindVane_Backend() {}
 
+    // initialization
+    virtual void init(const AP_SerialManager& serial_manager) {};
+
     // update the state structure
     virtual void update_speed() {};
     virtual void update_direction() {};
@@ -46,4 +49,5 @@ private:
     LowPassFilterFloat _dir_sin_filt = LowPassFilterFloat(2.0f);
     LowPassFilterFloat _dir_cos_filt = LowPassFilterFloat(2.0f);
     LowPassFilterFloat _speed_filt = LowPassFilterFloat(2.0f);
+    LowPassFilterFloat _tack_filt = LowPassFilterFloat(TACK_FILT_CUTOFF);
 };
